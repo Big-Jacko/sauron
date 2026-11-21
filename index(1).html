@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Live Cam</title>
+<style>
+  /* Written to run on iOS 12 Safari: no flex gap, no inset, no modern JS syntax. */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #0b0f14; color: #e6edf3;
+    font: 16px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif; }
+  body { overflow: hidden; }
+  .screen { position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: none; }
+  .screen.on { display: block; }
+
+  /* Home */
+  #home { display: none; padding: 40px 24px; text-align: center; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  #home.on { display: block; }
+  h1 { font-size: 28px; font-weight: 700; margin: 24px 0 6px; letter-spacing: -0.5px; }
+  .sub { color: #8b98a5; margin: 0 0 36px; }
+  .big { display: block; width: 100%; max-width: 360px; margin: 0 auto 14px; padding: 20px;
+    border: 1px solid #263241; border-radius: 16px; background: #131a22; color: #e6edf3;
+    font-size: 19px; font-weight: 600; text-align: left; cursor: pointer; }
+  .big small { display: block; font-weight: 400; font-size: 14px; color: #8b98a5; margin-top: 4px; }
+  .note { color: #6b7886; font-size: 13px; max-width: 360px; margin: 28px auto 0; line-height: 1.5; }
+
+  /* Video */
+  video { position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    object-fit: contain; background: #000; }
+
+  /* Overlays */
+  .bar { position: absolute; left: 0; right: 0; padding: 12px 14px;
+    padding-top: calc(12px + env(safe-area-inset-top));
+    display: flex; align-items: center; justify-content: space-between;
+    background: linear-gradient(rgba(0,0,0,.65), rgba(0,0,0,0)); z-index: 5; }
+  .bottom { top: auto; bottom: 0; padding-top: 12px; padding-bottom: calc(14px + env(safe-area-inset-bottom));
+    background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.7)); }
+  .top { top: 0; }
+  .pill { display: inline-block; padding: 6px 12px; border-radius: 999px; background: rgba(20,26,34,.85);
+    border: 1px solid rgba(255,255,255,.12); font-size: 14px; white-space: nowrap; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #6b7886;
+    margin-right: 7px; vertical-align: 1px; }
+  .dot.live { background: #3fb950; } .dot.wait { background: #d29922; } .dot.err { background: #f85149; }
+  .btn { display: inline-block; padding: 9px 14px; margin-left: 8px; border-radius: 10px;
+    background: rgba(20,26,34,.9); border: 1px solid rgba(255,255,255,.15); color: #e6edf3;
+    font-size: 15px; cursor: pointer; }
+  .btn:first-child { margin-left: 0; }
+  .code { font: 600 15px Menlo, monospace; letter-spacing: 1px; }
+
+  #dim { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000; z-index: 20;
+    display: none; color: #333; font-size: 13px; text-align: center; padding-top: 45%; }
+  #dim.on { display: block; }
+
+  /* Viewer pairing panel */
+  #pair { position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 10; background: #0b0f14;
+    padding: 60px 24px; text-align: center; display: none; }
+  #pair.on { display: block; }
+  input { width: 100%; max-width: 300px; padding: 14px; font: 600 22px Menlo, monospace; letter-spacing: 3px;
+    text-align: center; text-transform: uppercase; border-radius: 12px; border: 1px solid #263241;
+    background: #131a22; color: #e6edf3; -webkit-appearance: none; }
+  .primary { display: inline-block; margin-top: 16px; padding: 14px 28px; border-radius: 12px; border: 0;
+    background: #2f81f7; color: #fff; font-size: 17px; font-weight: 600; cursor: pointer; }
+  .msg { position: absolute; left: 0; right: 0; top: 45%; text-align: center; color: #8b98a5;
+    padding: 0 30px; z-index: 3; }
+</style>
+</head>
+<body>
+
+<!-- HOME -->
+<div id="home">
+  <h1>Live Cam</h1>
+  <p class="sub">Turn an old iPad into a live camera.</p>
+  <button class="big" id="goCam">📷 This device is the camera<small>Use this on the old iPad</small></button>
+  <button class="big" id="goView">📱 This device is the viewer<small>Use this on your phone</small></button>
+  <p class="note">Camera: open this page in Safari itself (not from a Home Screen icon) and set
+    Settings → Display &amp; Brightness → Auto-Lock to <b>Never</b>. Keep it plugged in.</p>
+</div>
+
+<!-- CAMERA -->
+<div id="cam" class="screen">
+  <video id="camVideo" autoplay playsinline muted></video>
+  <div class="bar top">
+    <span class="pill"><span class="dot" id="camDot"></span><span id="camStatus">Starting…</span></span>
+    <span class="pill">Code <span class="code" id="camCode"></span></span>
+  </div>
+  <div class="bar bottom">
+    <span><button class="btn" id="flip">Flip camera</button><button class="btn" id="sound">Sound: off</button></span>
+    <span><button class="btn" id="dimBtn">Dim</button><button class="btn" id="newCode">New code</button></span>
+  </div>
+  <div id="dim">Camera is live — tap to wake</div>
+</div>
+
+<!-- VIEWER -->
+<div id="view" class="screen">
+  <video id="viewVideo" autoplay playsinline muted></video>
+  <div class="msg" id="viewMsg"></div>
+  <div class="bar top">
+    <span class="pill"><span class="dot" id="viewDot"></span><span id="viewStatus">Connecting…</span></span>
+    <span><button class="btn" id="unmute">🔇</button><button class="btn" id="changeCode">Code</button></span>
+  </div>
+  <div id="pair">
+    <h1>Enter camera code</h1>
+    <p class="sub">It's shown at the top of the iPad screen.</p>
+    <input id="codeInput" maxlength="8" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
+    <br><button class="primary" id="pairGo">Connect</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.4.7/dist/peerjs.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var PREFIX = 'livecam-jtr-';            // namespaces our IDs on the public PeerJS server
+  var ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';  // no look-alike characters
+
+  function $(id) { return document.getElementById(id); }
+  function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
+  function makeCode() {
+    var out = '', arr = new Uint32Array(8);
+    window.crypto.getRandomValues(arr);
+    for (var i = 0; i < 8; i++) out += ALPHABET.charAt(arr[i] % ALPHABET.length);
+    return out;
+  }
+  function clean(code) { return String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+  function setStatus(dotEl, textEl, state, text) { dotEl.className = 'dot ' + state; textEl.textContent = text; }
+  function show(id) {
+    var ids = ['home', 'cam', 'view'];
+    for (var i = 0; i < ids.length; i++) $(ids[i]).className = (ids[i] === id ? 'screen on' : 'screen');
+    if (id === 'home') $('home').className = 'on';
+  }
+
+  /* ---------------------------------------------------------------- CAMERA */
+  var cam = { peer: null, stream: null, facing: 'environment', audio: false, calls: [], code: null, retry: null };
+
+  function startCamera() {
+    show('cam');
+    store('livecam-mode', 'cam');
+    cam.code = clean(store('livecam-camcode')) || makeCode();
+    store('livecam-camcode', cam.code);
+    $('camCode').textContent = cam.code;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus($('camDot'), $('camStatus'), 'err', 'Camera needs Safari over https');
+      return;
+    }
+    openStream(function () { connectCamPeer(); });
+  }
+
+  function openStream(done) {
+    if (cam.stream) cam.stream.getTracks().forEach(function (t) { t.stop(); });
+    var constraints = {
+      audio: cam.audio,
+      video: { facingMode: cam.facing, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 15, max: 20 } }
+    };
+    navigator.mediaDevices.getUserMedia(constraints).then(function (stream) {
+      cam.stream = stream;
+      $('camVideo').srcObject = stream;
+      var p = $('camVideo').play(); if (p && p.catch) p.catch(function () {});
+      // Push the new tracks into any calls already running
+      cam.calls.forEach(function (call) { replaceTracks(call, stream); });
+      if (done) done();
+    }).catch(function (err) {
+      setStatus($('camDot'), $('camStatus'), 'err', 'Camera blocked: ' + (err.name || err));
+    });
+  }
+
+  function replaceTracks(call, stream) {
+    var pc = call.peerConnection; if (!pc || !pc.getSenders) return;
+    pc.getSenders().forEach(function (sender) {
+      if (!sender.track) return;
+      var match = stream.getTracks().filter(function (t) { return t.kind === sender.track.kind; })[0];
+      if (match) sender.replaceTrack(match);
+    });
+  }
+
+  function connectCamPeer() {
+    if (cam.peer) { try { cam.peer.destroy(); } catch (e) {} }
+    setStatus($('camDot'), $('camStatus'), 'wait', 'Going online…');
+    var peer = new Peer(PREFIX + cam.code.toLowerCase(), { debug: 1 });
+    cam.peer = peer;
+
+    peer.on('open', function () { updateCamStatus(); });
+
+    // A viewer opens a data connection to say hi; we answer by calling it with the video.
+    peer.on('connection', function (conn) {
+      conn.on('open', function () {
+        if (!cam.stream) return;
+        var call = peer.call(conn.peer, cam.stream);
+        if (!call || !cam.stream) return;
+        cam.calls.push(call);
+        updateCamStatus();
+        var drop = function () {
+          cam.calls = cam.calls.filter(function (c) { return c !== call; });
+          updateCamStatus();
+        };
+        call.on('close', drop); call.on('error', drop);
+        conn.on('close', function () { try { call.close(); } catch (e) {} drop(); });
+      });
+    });
+
+    peer.on('disconnected', function () {
+      setStatus($('camDot'), $('camStatus'), 'wait', 'Reconnecting…');
+      setTimeout(function () { if (cam.peer === peer && !peer.destroyed) peer.reconnect(); }, 2000);
+    });
+
+    peer.on('error', function (err) {
+      var type = err && err.type;
+      if (type === 'unavailable-id') {
+        // Our old session is still registered (e.g. after a reload). Wait for it to expire.
+        setStatus($('camDot'), $('camStatus'), 'wait', 'Waiting for old session to clear…');
+        clearTimeout(cam.retry); cam.retry = setTimeout(connectCamPeer, 8000);
+      } else if (type === 'network' || type === 'server-error' || type === 'socket-error' || type === 'socket-closed') {
+        setStatus($('camDot'), $('camStatus'), 'wait', 'Offline — retrying…');
+        clearTimeout(cam.retry); cam.retry = setTimeout(connectCamPeer, 5000);
+      } else if (type === 'browser-incompatible') {
+        setStatus($('camDot'), $('camStatus'), 'err', 'This browser can’t stream');
+      }
+    });
+  }
+
+  function updateCamStatus() {
+    var n = cam.calls.length;
+    if (n > 0) setStatus($('camDot'), $('camStatus'), 'live', 'Live · ' + n + ' watching');
+    else setStatus($('camDot'), $('camStatus'), 'wait', 'Online · waiting for viewer');
+  }
+
+  $('flip').onclick = function () { cam.facing = cam.facing === 'environment' ? 'user' : 'environment'; openStream(); };
+  $('sound').onclick = function () {
+    cam.audio = !cam.audio; $('sound').textContent = 'Sound: ' + (cam.audio ? 'on' : 'off');
+    // Audio tracks can't be added to a running call, so viewers reconnect to pick up the change.
+    openStream(function () { cam.calls.slice().forEach(function (c) { try { c.close(); } catch (e) {} }); });
+  };
+  $('dimBtn').onclick = function () { $('dim').className = 'on'; };
+  $('dim').onclick = function () { $('dim').className = ''; };
+  $('newCode').onclick = function () {
+    if (!confirm('Make a new code? Viewers will need to enter it again.')) return;
+    cam.code = makeCode(); store('livecam-camcode', cam.code); $('camCode').textContent = cam.code;
+    cam.calls = []; connectCamPeer();
+  };
+
+  /* ---------------------------------------------------------------- VIEWER */
+  var view = { peer: null, conn: null, call: null, code: null, timer: null };
+
+  function startViewer(code) {
+    show('view');
+    store('livecam-mode', 'view');
+    view.code = clean(code) || clean(store('livecam-viewcode'));
+    if (!view.code) { $('pair').className = 'on'; $('codeInput').focus(); return; }
+    store('livecam-viewcode', view.code);
+    $('pair').className = '';
+    if (view.peer) { try { view.peer.destroy(); } catch (e) {} }
+    setStatus($('viewDot'), $('viewStatus'), 'wait', 'Connecting…');
+    $('viewMsg').textContent = 'Looking for camera ' + view.code + '…';
+
+    var peer = new Peer({ debug: 1 });   // random ID for the viewer
+    view.peer = peer;
+
+    peer.on('open', dial);
+    peer.on('call', function (call) {
+      view.call = call;
+      call.answer();                    // receive only
+      call.on('stream', function (stream) {
+        var v = $('viewVideo'); v.srcObject = stream;
+        var p = v.play(); if (p && p.catch) p.catch(function () {});
+        $('viewMsg').textContent = '';
+        setStatus($('viewDot'), $('viewStatus'), 'live', 'Live');
+        clearTimeout(view.timer);
+      });
+      call.on('close', lost);
+      call.on('error', lost);
+      watchIce(call);
+    });
+    peer.on('error', function (err) {
+      if (err && err.type === 'peer-unavailable') {
+        setStatus($('viewDot'), $('viewStatus'), 'wait', 'Camera offline');
+        $('viewMsg').textContent = 'Camera ' + view.code + ' isn’t online. Retrying…';
+        retry(4000);
+      } else if (err && (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error')) {
+        retry(4000, true);
+      }
+    });
+    peer.on('disconnected', function () { if (!peer.destroyed) peer.reconnect(); });
+  }
+
+  function dial() {
+    if (!view.peer || view.peer.destroyed) return;
+    if (view.conn) { try { view.conn.close(); } catch (e) {} }
+    view.conn = view.peer.connect(PREFIX + view.code.toLowerCase(), { serialization: 'json', reliable: true });
+    view.conn.on('close', lost);
+    // If no video shows up in 15s, try again.
+    clearTimeout(view.timer); view.timer = setTimeout(function () { if (!view.call) dial(); }, 15000);
+  }
+
+  function watchIce(call) {
+    var pc = call.peerConnection; if (!pc) return;
+    pc.addEventListener('iceconnectionstatechange', function () {
+      var s = pc.iceConnectionState;
+      if (s === 'disconnected') setStatus($('viewDot'), $('viewStatus'), 'wait', 'Weak connection…');
+      if (s === 'connected' || s === 'completed') setStatus($('viewDot'), $('viewStatus'), 'live', 'Live');
+      if (s === 'failed') lost();
+    });
+  }
+
+  function lost() {
+    view.call = null;
+    setStatus($('viewDot'), $('viewStatus'), 'wait', 'Reconnecting…');
+    $('viewMsg').textContent = 'Lost the camera. Reconnecting…';
+    retry(3000);
+  }
+
+  function retry(ms, full) {
+    clearTimeout(view.timer);
+    view.timer = setTimeout(function () {
+      if (full || !view.peer || view.peer.destroyed || view.peer.disconnected) startViewer(view.code);
+      else dial();
+    }, ms);
+  }
+
+  $('pairGo').onclick = function () {
+    var c = clean($('codeInput').value);
+    if (c.length < 4) { $('codeInput').focus(); return; }
+    startViewer(c);
+  };
+  $('codeInput').onkeydown = function (e) { if (e.keyCode === 13) $('pairGo').onclick(); };
+  $('changeCode').onclick = function () { $('codeInput').value = view.code || ''; $('pair').className = 'on'; };
+  $('unmute').onclick = function () {
+    var v = $('viewVideo'); v.muted = !v.muted; $('unmute').textContent = v.muted ? '🔇' : '🔊';
+    var p = v.play(); if (p && p.catch) p.catch(function () {});
+  };
+  // Coming back to the tab after the phone slept: make sure we're still connected.
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible' && store('livecam-mode') === 'view' && !view.call && view.code) startViewer(view.code);
+  });
+
+  /* ---------------------------------------------------------------- START */
+  $('goCam').onclick = startCamera;
+  $('goView').onclick = function () { startViewer(); };
+
+  if (typeof Peer === 'undefined') {
+    show('home');
+    $('home').innerHTML = '<h1>Couldn’t load</h1><p class="sub">The streaming library didn’t load. Check the internet connection and reload.</p>';
+    return;
+  }
+
+  // Links: …/#cam opens camera mode, …/#view=CODE opens the viewer paired to CODE.
+  var hash = location.hash.replace('#', '');
+  if (hash === 'cam') startCamera();
+  else if (hash.indexOf('view') === 0) startViewer(hash.split('=')[1]);
+  else show('home');
+})();
+</script>
+</body>
+</html>
